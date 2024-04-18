@@ -55,7 +55,16 @@ DELETE /todos, body: [{id: int}]- delete todo"
 
     let listener = tokio::net::TcpListener::bind(URL).await.unwrap();
     println!("Listening on http://{}", URL);
-    axum::serve(listener, app).await.unwrap();
+    let run_on_subpath = &env::var("RUN_ON_SUBPATH");
+    match run_on_subpath {
+        Ok("True") => {
+            let subpath_router = Router::new().nest("/timely", app);
+            axum::serve(listener, subpath_router).await.unwrap();
+        }
+        _ => {
+            axum::serve(listener, app).await.unwrap();
+        }
+    }
 }
 
 async fn get_todos(State(pool): State<PgPool>) -> Result<Json<Vec<Todo>>, (StatusCode, String)> {
