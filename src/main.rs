@@ -24,6 +24,7 @@ type AppEngine = Engine<Tera>;
 struct CreateTodo {
     name: String,
     description: Option<String>,
+    parent_id: Option<i64>,
 }
 
 const URL: &str = "localhost:3000";
@@ -61,7 +62,7 @@ async fn get_todos(State(pool): State<PgPool>) -> Result<Json<Vec<Todo>>, (Statu
     let todos = sqlx::query_as!(
         Todo,
         "
-            SELECT id, name, done, description 
+            SELECT id, name, done, description, parent_id 
             FROM todos
             ORDER BY id
         "
@@ -82,12 +83,13 @@ async fn create_todo(
     let new_todo = sqlx::query_as!(
         Todo,
         "
-            INSERT INTO todos (name, description )
-            VALUES ( $1, $2)
-            RETURNING id, name, done, description
+            INSERT INTO todos (name, description, parent_id )
+            VALUES ( $1, $2, $3)
+            RETURNING id, name, done, description, parent_id
         ",
         payload.name,
         payload.description,
+        payload.parent_id
     )
     .fetch_one(&pool)
     .await;
@@ -102,6 +104,27 @@ async fn delete_todo(
     State(pool): State<PgPool>,
     extract::Json(id_to_delete): extract::Json<i64>,
 ) -> Result<Json<Vec<Todo>>, (StatusCode, String)> {
+    let todo_to_delete = sqlx::query_as!(
+        Todo,
+        "
+            SELECT * FROM todos
+            WHERE id = $1
+        ",
+        id_to_delete
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    //delete all children of the todo
+    let delete_children_successful = sqlx::query!(
+        "DELETE FROM todos
+        WHERE parent_id = $1",
+        todo_to_delete.id
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let delete_successful = sqlx::query!(
         "DELETE FROM todos
         WHERE id = $1",
@@ -129,13 +152,14 @@ async fn toggle_todo(
     State(pool): State<PgPool>,
     extract::Json(todo_id): extract::Json<i64>,
 ) -> Result<Json<Todo>, (StatusCode, String)> {
+    //toggle task and its children
     let toggle_result = sqlx::query_as!(
         Todo,
         "
             UPDATE todos
             SET done = NOT done
-            WHERE id = $1
-            RETURNING id, name, done, description
+            WHERE id = $1 OR parent_id = $1
+            RETURNING id, name, done, description, parent_id
         ",
         todo_id
     )

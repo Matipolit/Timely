@@ -6,4 +6,5 @@ pub struct Todo {
     pub name: String,
     pub done: bool,
     pub description: Option<String>,
+    pub parent_id: Option<i64>,
 }
