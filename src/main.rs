@@ -54,16 +54,19 @@ DELETE /todos, body: [{id: int}]- delete todo"
         .with_state(pool);
 
     let listener = tokio::net::TcpListener::bind(URL).await.unwrap();
-    println!("Listening on http://{}", URL);
     let run_on_subpath = &env::var("RUN_ON_SUBPATH");
-    match run_on_subpath {
-        Ok("True") => {
+    if run_on_subpath.is_ok() {
+        if run_on_subpath.as_ref().unwrap().to_lowercase() == "true" {
             let subpath_router = Router::new().nest("/timely", app);
-            axum::serve(listener, subpath_router).await.unwrap();
+            println!("Listening on http://{}/timely", URL);
+            axum::serve(listener, subpath_router).await.unwrap()
+        } else {
+            println!("Listening on http://{}", URL);
+            axum::serve(listener, app).await.unwrap()
         }
-        _ => {
-            axum::serve(listener, app).await.unwrap();
-        }
+    } else {
+        println!("Listening on http://{}", URL);
+        axum::serve(listener, app).await.unwrap()
     }
 }
 
