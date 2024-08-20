@@ -1,24 +1,17 @@
 use std::env;
 
 use axum::{
-    extract::{self, FromRef, FromRequestParts, State},
+    extract::{self, State},
     http::StatusCode,
-    routing::{delete, get, patch, post},
+    routing::{delete, get, post},
     Json, Router,
 };
-use axum_template::{engine::Engine, Key, RenderHtml};
 
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use tera::Tera;
-use uuid::Uuid;
+use serde::Deserialize;
 
-use anyhow;
 use dotenvy::dotenv;
-use sqlx::{postgres::PgPool, Acquire};
+use sqlx::postgres::PgPool;
 use timely_lib::Todo;
-
-type AppEngine = Engine<Tera>;
 
 #[derive(Deserialize)]
 struct CreateTodo {
@@ -41,10 +34,10 @@ async fn main() {
             "/",
             get(|| async {
                 "Welcome to Timely!
-GET /todos - get all todos
-POST /todos, body: [{name: string, description: option<string>}] - create todo
-POST /todos/toggle, body: [{id: int}] - toggle todo
-DELETE /todos, body: [{id: int}]- delete todo"
+GET /todos - get all todos: Vec<Todo>
+POST /todos, body: [{name: string, description: option<string>, parent_id: option<int>}] - create todo : Todo
+POST /todos/toggle, body: [{id: int}] - toggle todo: Bool
+DELETE /todos, body: [{id: int}]- delete todo: Vec<Todo>"
             }),
         )
         .route("/todos", get(get_todos))
@@ -129,7 +122,7 @@ async fn delete_todo(
     .unwrap();
 
     //delete all children of the todo
-    let delete_children_successful = sqlx::query!(
+    let _delete_children_successful = sqlx::query!(
         "DELETE FROM todos
         WHERE parent_id = $1",
         todo_to_delete.id
@@ -163,7 +156,7 @@ async fn delete_todo(
 async fn toggle_todo(
     State(pool): State<PgPool>,
     extract::Json(todo_id): extract::Json<i64>,
-) -> Result<Json<Todo>, (StatusCode, String)> {
+) -> Result<Json<bool>, (StatusCode, String)> {
     //toggle task and its children
     let toggle_result = sqlx::query_as!(
         Todo,
@@ -179,7 +172,7 @@ async fn toggle_todo(
     .await;
 
     match toggle_result {
-        Ok(todo) => Ok(Json(todo)),
+        Ok(todo) => Ok(Json(todo.done)),
         Err(err) => Err(internal_error(err)),
     }
 }
