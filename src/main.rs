@@ -3,7 +3,6 @@ use std::env;
 use axum::{
     extract::{self, Query, State},
     http::StatusCode,
-    response::Html,
     routing::{delete, get, post},
     Json, Router,
 };
@@ -91,26 +90,30 @@ fn authenticate(original_hash: &DigestedHash, provided_pass: &String) -> bool {
     }
 }
 
+async fn get_todos_inner(pool: PgPool) -> Result<Json<Vec<Todo>>, (StatusCode, String)> {
+    let todos = sqlx::query_as!(
+        Todo,
+        "
+                SELECT id, name, done, description, parent_id 
+                FROM todos
+                ORDER BY id
+            "
+    )
+    .fetch_all(&pool)
+    .await;
+
+    match todos {
+        Ok(todos_vec) => return Ok(Json(todos_vec)),
+        Err(err) => return Err(internal_error(err)),
+    };
+}
+
 async fn get_todos(
     Query(query): Query<PasswordQuery>,
     State((pool, hash)): State<(PgPool, DigestedHash)>,
 ) -> Result<Json<Vec<Todo>>, (StatusCode, String)> {
     if authenticate(&hash, &query.password) {
-        let todos = sqlx::query_as!(
-            Todo,
-            "
-                SELECT id, name, done, description, parent_id 
-                FROM todos
-                ORDER BY id
-            "
-        )
-        .fetch_all(&pool)
-        .await;
-
-        match todos {
-            Ok(todos_vec) => return Ok(Json(todos_vec)),
-            Err(err) => return Err(internal_error(err)),
-        };
+        get_todos_inner(pool).await
     } else {
         Err((StatusCode::UNAUTHORIZED, "Failed authentication".to_owned()))
     }
@@ -151,31 +154,29 @@ async fn delete_todo(
     extract::Json(id_to_delete): extract::Json<i64>,
 ) -> Result<Json<Vec<Todo>>, (StatusCode, String)> {
     if authenticate(&hash, &query.password) {
-        let todo_to_delete = sqlx::query_as!(
-            Todo,
-            "
-            SELECT * FROM todos
-            WHERE id = $1
-        ",
-            id_to_delete
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        dbg!("Auth");
 
-        //delete all children of the todo
-        let _delete_children_successful = sqlx::query!(
-            "DELETE FROM todos
-        WHERE parent_id = $1",
-            todo_to_delete.id
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        // 1. Fetch the todo to delete (ensure it exists)
+        let todo_to_delete =
+            sqlx::query_as!(Todo, "SELECT * FROM todos WHERE id = $1", id_to_delete)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        // 2. Use a recursive CTE to delete all descendants
         let delete_successful = sqlx::query!(
-            "DELETE FROM todos
-        WHERE id = $1",
-            id_to_delete
+            "
+            WITH RECURSIVE todo_hierarchy AS (
+                -- Base case: select the todo to delete
+                SELECT id FROM todos WHERE id = $1
+                UNION
+                -- Recursive case: find all children of the todos found in the previous step
+                SELECT t.id FROM todos t
+                INNER JOIN todo_hierarchy th ON t.parent_id = th.id
+            )
+            DELETE FROM todos WHERE id IN (SELECT id FROM todo_hierarchy);
+            ",
+            todo_to_delete.id
         )
         .execute(&pool)
         .await
@@ -183,16 +184,16 @@ async fn delete_todo(
         .rows_affected()
             > 0;
 
-        let new_todos = get_todos(Query(query), State((pool, hash))).await.unwrap();
+        // 3. Fetch updated todo list after deletion
+        let new_todos = get_todos_inner(pool).await.unwrap();
+
         match delete_successful {
-            true => return Ok(new_todos),
-            false => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Could not delete".to_owned(),
-                ))
-            }
-        };
+            true => Ok(new_todos),
+            false => Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not delete".to_owned(),
+            )),
+        }
     } else {
         Err((StatusCode::UNAUTHORIZED, "Failed authentication".to_owned()))
     }
