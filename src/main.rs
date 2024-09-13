@@ -20,13 +20,12 @@ struct CreateTodo {
     parent_id: Option<i64>,
 }
 
-const URL: &str = "localhost:3000";
-
 #[tokio::main]
 async fn main() {
     dotenv().expect(".env file not found");
 
     let database_url = &env::var("DATABASE_URL").unwrap();
+    let service_url = &env::var("SERVICE_URL").unwrap();
     println!("Using database url: {}", &database_url);
     let pool = PgPool::connect(database_url).await.unwrap();
     let app = Router::new()
@@ -46,19 +45,19 @@ DELETE /todos, body: [{id: int}]- delete todo: Vec<Todo>"
         .route("/todos", delete(delete_todo))
         .with_state(pool);
 
-    let listener = tokio::net::TcpListener::bind(URL).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(service_url).await.unwrap();
     let run_on_subpath = &env::var("RUN_ON_SUBPATH");
     if run_on_subpath.is_ok() {
         if run_on_subpath.as_ref().unwrap().to_lowercase() == "true" {
             let subpath_router = Router::new().nest("/timely", app);
-            println!("Listening on http://{}/timely", URL);
+            println!("Listening on http://{}/timely", service_url);
             axum::serve(listener, subpath_router).await.unwrap()
         } else {
-            println!("Listening on http://{}", URL);
+            println!("Listening on http://{}", service_url);
             axum::serve(listener, app).await.unwrap()
         }
     } else {
-        println!("Listening on http://{}", URL);
+        println!("Listening on http://{}", service_url);
         axum::serve(listener, app).await.unwrap()
     }
 }
