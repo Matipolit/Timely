@@ -8,8 +8,10 @@ use iced::{
     alignment, font, Alignment, Application, Command, Element, Font, Length, Pixels, Settings,
     Size, Theme,
 };
+use indexmap::IndexMap;
 use reqwest::{self, Client};
 use serde::{Deserialize, Serialize};
+
 use std::collections::HashMap;
 use std::env::home_dir;
 use std::fmt::Debug;
@@ -43,6 +45,7 @@ fn palette_map() -> HashMap<&'static str, Palette> {
 struct AppSettings {
     server_url: String,
     palette: String,
+    password: String,
 }
 
 impl Default for AppSettings {
@@ -50,6 +53,7 @@ impl Default for AppSettings {
         AppSettings {
             server_url: "http://localhost:3000".into(),
             palette: "light".into(),
+            password: "123".into(),
         }
     }
 }
@@ -149,13 +153,14 @@ enum Message {
     FontLoaded(Result<(), font::Error>),
     TodoMessage(i64, TodoMessage),
     ChangeUrl(String),
+    ChangePassword(String),
     SaveSettings,
     None,
 }
 
-async fn load(client: Client, url: String) -> Result<Vec<Todo>, Error> {
+async fn load(client: Client, url: String, password: String) -> Result<Vec<Todo>, Error> {
     let response: Vec<Todo> = client
-        .get(format!("{}/todos", url))
+        .get(format!("{}/todos?password={}", url, password))
         .send()
         .await?
         .json()
@@ -167,9 +172,10 @@ async fn submit_new_todo(
     todo_to_send: TodoToSend,
     client: Client,
     url: String,
+    password: String,
 ) -> Result<Todo, Error> {
     let response: Todo = client
-        .post(format!("{}/todos", url))
+        .post(format!("{}/todos?password={}", url, password))
         .json(&todo_to_send)
         .send()
         .await?
@@ -178,9 +184,14 @@ async fn submit_new_todo(
     Ok(response)
 }
 
-async fn delete_todo(id: i64, client: Client, url: String) -> Result<Vec<Todo>, Error> {
+async fn delete_todo(
+    id: i64,
+    client: Client,
+    url: String,
+    password: String,
+) -> Result<Vec<Todo>, Error> {
     let response: Vec<Todo> = client
-        .delete(format!("{}/todos", url))
+        .delete(format!("{}/todos?password={}", url, password))
         .json(&id)
         .send()
         .await?
@@ -189,9 +200,14 @@ async fn delete_todo(id: i64, client: Client, url: String) -> Result<Vec<Todo>, 
     Ok(response)
 }
 
-async fn toggle_todo(id: i64, client: Client, url: String) -> Result<(i64, bool), Error> {
+async fn toggle_todo(
+    id: i64,
+    client: Client,
+    url: String,
+    password: String,
+) -> Result<(i64, bool), Error> {
     let response: bool = client
-        .post(format!("{}/todos/toggle", url))
+        .post(format!("{}/todos/toggle?password={}", url, password))
         .json(&id)
         .send()
         .await?
@@ -216,11 +232,17 @@ impl Application for App {
     type Flags = AppSettings;
 
     fn new(flags: Self::Flags) -> (Self, iced::Command<Self::Message>) {
-        let server_url = flags.server_url.clone();
         let client = Client::new();
         let command = Command::batch([
             font::load(include_bytes!("../fonts/icons.ttf").as_slice()).map(Message::FontLoaded),
-            Command::perform(load(client.clone(), server_url.clone()), Message::Loaded),
+            Command::perform(
+                load(
+                    client.clone(),
+                    flags.server_url.clone(),
+                    flags.password.clone(),
+                ),
+                Message::Loaded,
+            ),
         ]);
 
         let app = App {
@@ -267,7 +289,11 @@ impl Application for App {
                 }
             },
             Message::Load => Command::perform(
-                load(self.client.clone(), self.settings.server_url.clone()),
+                load(
+                    self.client.clone(),
+                    self.settings.server_url.clone(),
+                    self.settings.password.clone(),
+                ),
                 Message::Loaded,
             ),
             Message::None => Command::none(),
@@ -288,6 +314,7 @@ impl Application for App {
                     },
                     self.client.clone(),
                     self.settings.server_url.clone(),
+                    self.settings.password.clone(),
                 ),
                 Message::SubmittedNewTodo,
             ),
@@ -303,11 +330,21 @@ impl Application for App {
                 if let Some(_todo) = TodoHierarchy::get_hierarchy_by_id(&mut self.todos, id) {
                     match message {
                         TodoMessage::Done(id, _state) => Command::perform(
-                            toggle_todo(id, self.client.clone(), self.settings.server_url.clone()),
+                            toggle_todo(
+                                id,
+                                self.client.clone(),
+                                self.settings.server_url.clone(),
+                                self.settings.password.clone(),
+                            ),
                             Message::TodoToggled,
                         ),
                         TodoMessage::Delete(id) => Command::perform(
-                            delete_todo(id, self.client.clone(), self.settings.server_url.clone()),
+                            delete_todo(
+                                id,
+                                self.client.clone(),
+                                self.settings.server_url.clone(),
+                                self.settings.password.clone(),
+                            ),
                             Message::Loaded,
                         ),
                         TodoMessage::AddChild(parent_id) => {
@@ -335,6 +372,10 @@ impl Application for App {
                 self.settings.server_url = new_url;
                 Command::none()
             }
+            Message::ChangePassword(new_password) => {
+                self.settings.password = new_password;
+                Command::none()
+            }
             Message::SaveSettings => {
                 self.settings.save();
                 self.state = AppState::Loaded("".into());
@@ -350,7 +391,7 @@ impl Application for App {
     fn view(&self) -> Element<'_, Self::Message, Self::Theme, iced::Renderer> {
         let content: Element<_> = match &self.state {
             AppState::Loading => text("Loading...").into(),
-            AppState::Loaded(input_value) => {
+            AppState::Loaded(_input_value) => {
                 let control_buttons = row![
                     text("Timely").size(28),
                     button("Add new").on_press(Message::LoadScreenAddNewTodo(
@@ -428,6 +469,13 @@ impl Application for App {
                 ]
                 .align_items(Alignment::Center)
                 .spacing(10),
+                row![
+                    text("Password:"),
+                    text_input("Password", self.settings.password.as_str())
+                        .on_input(Message::ChangePassword),
+                ]
+                .align_items(Alignment::Center)
+                .spacing(10),
                 button("Save").on_press(Message::SaveSettings)
             ]
             .spacing(10)
@@ -447,11 +495,10 @@ pub struct TodoHierarchy {
     pub children: Vec<TodoHierarchy>,
 }
 
-pub fn build_hierarchy(todos: Vec<Todo>) -> Vec<TodoHierarchy> {
-    let mut todo_map: HashMap<i64, TodoHierarchy> = HashMap::new();
-    let mut root_todos: Vec<TodoHierarchy> = Vec::new();
+pub fn build_hierarchy(mut todos: Vec<Todo>) -> Vec<TodoHierarchy> {
+    let mut todo_map: IndexMap<i64, TodoHierarchy> = IndexMap::new();
 
-    // Step 1: Create TodoHierarchy for each Todo and store in a HashMap
+    todos.reverse();
     for todo in todos {
         let id = todo.id;
         todo_map.insert(
@@ -463,32 +510,29 @@ pub fn build_hierarchy(todos: Vec<Todo>) -> Vec<TodoHierarchy> {
         );
     }
 
-    // Step 2: Iterate through the map and build the hierarchy
-    for (id, hierarchy) in todo_map.clone() {
-        if let Some(parent_id) = hierarchy.todo.parent_id {
-            if let Some(parent_hierarchy) = todo_map.get_mut(&parent_id) {
-                parent_hierarchy.children.push(hierarchy);
-                todo_map.remove(&id);
+    let mut root_todos: Vec<TodoHierarchy> = Vec::new();
+
+    // Collect all the keys first
+    let todo_ids: Vec<i64> = todo_map.keys().copied().collect();
+
+    for id in todo_ids {
+        if let Some(hierarchy) = todo_map.swap_remove(&id) {
+            // if it has a parent
+            if let Some(parent_id) = hierarchy.todo.parent_id {
+                // if the parent is available in todo_map
+                if let Some(parent_hierarchy) = todo_map.get_mut(&parent_id) {
+                    parent_hierarchy.children.push(hierarchy);
+                }
+            } else {
+                root_todos.push(hierarchy);
             }
-        } else {
-            root_todos.push(hierarchy);
-        }
-    }
-    fn sort_hierarchy_by_id(hierarchies: &mut Vec<TodoHierarchy>) {
-        hierarchies.sort_by(|a, b| a.todo.id.cmp(&b.todo.id)); // Sort by id
-
-        // Recursively sort children
-        for hierarchy in hierarchies {
-            sort_hierarchy_by_id(&mut hierarchy.children);
         }
     }
 
-    let mut hierarchy_vec: Vec<TodoHierarchy> = todo_map.into_values().collect();
+    root_todos.reverse();
 
-    sort_hierarchy_by_id(&mut hierarchy_vec);
-    hierarchy_vec
+    root_todos
 }
-
 pub fn add_to_hierarchy(hierarchy: &mut Vec<TodoHierarchy>, todo: Todo) {
     fn try_add_to_hierarchy(hierarchy: &mut Vec<TodoHierarchy>, todo: Todo) -> bool {
         for sub_hierarchy in hierarchy {
@@ -590,8 +634,7 @@ impl TodoHierarchy {
 
 fn main() -> iced::Result {
     let settings = AppSettings::load().unwrap_or(AppSettings {
-        server_url: "http://localhost:3000".into(),
-        palette: "LIGHT".into(),
+        ..Default::default()
     });
 
     println!("Using server url: {}", settings.server_url);
