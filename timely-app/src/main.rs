@@ -5,8 +5,8 @@ use iced::widget::{
     Container, Text,
 };
 use iced::{
-    alignment, font, Alignment, Application, Command, Element, Font, Length, Pixels, Settings,
-    Size, Theme,
+    alignment, font, Alignment, Application, Element, Font, Length, Pixels, Settings, Size, Task,
+    Theme,
 };
 use indexmap::IndexMap;
 use reqwest::{self, Client};
@@ -18,7 +18,7 @@ use std::fmt::Debug;
 use std::fs;
 use std::path::PathBuf;
 
-use timely_lib::Todo;
+use timely_lib::{build_hierarchy, Todo, TodoHierarchy};
 
 // Settings
 
@@ -32,6 +32,8 @@ fn palette_map() -> HashMap<&'static str, Palette> {
     map.insert("light", Palette::LIGHT);
     map.insert("dark", Palette::DARK);
     map.insert("dracula", Palette::DRACULA);
+    map.insert("gruvbox_dark", Palette::GRUVBOX_DARK);
+    map.insert("gruvbox_light", Palette::GRUVBOX_LIGHT);
     map.insert("kanagawa_wave", Palette::KANAGAWA_WAVE);
     map.insert("kanagawa_dragon", Palette::KANAGAWA_DRAGON);
     map.insert("kanagawa_lotus", Palette::KANAGAWA_LOTUS);
@@ -88,8 +90,8 @@ fn icon(unicode: char) -> Text<'static> {
     text(unicode.to_string())
         .font(ICONS)
         .size(16)
-        .horizontal_alignment(alignment::Horizontal::Center)
-        .vertical_alignment(alignment::Vertical::Center)
+        .align_x(alignment::Horizontal::Center)
+        .align_y(alignment::Vertical::Center)
 }
 
 fn edit_icon() -> Text<'static> {
@@ -99,8 +101,8 @@ fn edit_icon() -> Text<'static> {
 fn add_icon() -> Text<'static> {
     text("+")
         .size(16)
-        .horizontal_alignment(alignment::Horizontal::Center)
-        .vertical_alignment(alignment::Vertical::Center)
+        .align_x(alignment::Horizontal::Center)
+        .align_y(alignment::Vertical::Center)
 }
 
 fn delete_icon() -> Text<'static> {
@@ -225,22 +227,13 @@ struct App {
     settings: AppSettings,
 }
 
-impl Application for App {
-    type Executor = iced::executor::Default;
-    type Message = Message;
-    type Theme = Theme;
-    type Flags = AppSettings;
-
-    fn new(flags: Self::Flags) -> (Self, iced::Command<Self::Message>) {
+impl App {
+    fn new(server_url: String, password: String, palette: String) -> (Self, Task<Message>) {
         let client = Client::new();
-        let command = Command::batch([
+        let command = Task::batch([
             font::load(include_bytes!("../fonts/icons.ttf").as_slice()).map(Message::FontLoaded),
-            Command::perform(
-                load(
-                    client.clone(),
-                    flags.server_url.clone(),
-                    flags.password.clone(),
-                ),
+            Task::perform(
+                load(client.clone(), server_url.clone(), password.clone()),
                 Message::Loaded,
             ),
         ]);
@@ -250,9 +243,13 @@ impl Application for App {
             todos: Vec::new(),
             client,
             palette: *palette_map()
-                .get(flags.palette.as_str())
+                .get(palette.as_str())
                 .unwrap_or(&Palette::LIGHT),
-            settings: flags,
+            settings: AppSettings {
+                server_url,
+                palette,
+                password,
+            },
         };
 
         (app, command)
@@ -270,25 +267,25 @@ impl Application for App {
         format!("{subtitle}Timely")
     }
 
-    fn theme(&self) -> Self::Theme {
+    fn theme(&self) -> Theme {
         Theme::custom("user_theme".into(), self.palette)
     }
 
-    fn update(&mut self, message: Self::Message) -> iced::Command<Self::Message> {
+    fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Loaded(todos_result) => match todos_result {
                 Ok(todos) => {
                     let hierarchy = build_hierarchy(todos);
                     self.state = AppState::Loaded("".to_owned());
                     self.todos = hierarchy;
-                    Command::none()
+                    Task::none()
                 }
                 Err(todos_error) => {
                     self.state = AppState::Errored(format!("{:?}", todos_error));
-                    Command::none()
+                    Task::none()
                 }
             },
-            Message::Load => Command::perform(
+            Message::Load => Task::perform(
                 load(
                     self.client.clone(),
                     self.settings.server_url.clone(),
@@ -296,16 +293,16 @@ impl Application for App {
                 ),
                 Message::Loaded,
             ),
-            Message::None => Command::none(),
+            Message::None => Task::none(),
             Message::LoadScreenAddNewTodo(title, description, parent_id) => {
                 self.state = AppState::AddingNewTodo(title, description, parent_id);
-                Command::none()
+                Task::none()
             }
             Message::GoBackToMain => {
                 self.state = AppState::Loaded("".to_owned());
-                Command::none()
+                Task::none()
             }
-            Message::SubmitNewTodo(name, description, parent_id) => Command::perform(
+            Message::SubmitNewTodo(name, description, parent_id) => Task::perform(
                 submit_new_todo(
                     TodoToSend {
                         name,
@@ -323,13 +320,13 @@ impl Application for App {
                     add_to_hierarchy(&mut self.todos, todo.unwrap());
                     self.state = AppState::Loaded("".to_owned());
                 }
-                Command::none()
+                Task::none()
             }
-            Message::FontLoaded(_) => Command::none(),
+            Message::FontLoaded(_) => Task::none(),
             Message::TodoMessage(id, message) => {
                 if let Some(_todo) = TodoHierarchy::get_hierarchy_by_id(&mut self.todos, id) {
                     match message {
-                        TodoMessage::Done(id, _state) => Command::perform(
+                        TodoMessage::Done(id, _state) => Task::perform(
                             toggle_todo(
                                 id,
                                 self.client.clone(),
@@ -338,7 +335,7 @@ impl Application for App {
                             ),
                             Message::TodoToggled,
                         ),
-                        TodoMessage::Delete(id) => Command::perform(
+                        TodoMessage::Delete(id) => Task::perform(
                             delete_todo(
                                 id,
                                 self.client.clone(),
@@ -350,11 +347,11 @@ impl Application for App {
                         TodoMessage::AddChild(parent_id) => {
                             self.state =
                                 AppState::AddingNewTodo("".into(), "".into(), Some(parent_id));
-                            Command::none()
+                            Task::none()
                         }
                     }
                 } else {
-                    Command::none()
+                    Task::none()
                 }
             }
             Message::TodoToggled(result) => {
@@ -366,29 +363,29 @@ impl Application for App {
                         todo.toggle_with_children(ok_result.1);
                     }
                 }
-                Command::none()
+                Task::none()
             }
             Message::ChangeUrl(new_url) => {
                 self.settings.server_url = new_url;
-                Command::none()
+                Task::none()
             }
             Message::ChangePassword(new_password) => {
                 self.settings.password = new_password;
-                Command::none()
+                Task::none()
             }
             Message::SaveSettings => {
                 self.settings.save();
                 self.state = AppState::Loaded("".into());
-                Command::none()
+                Task::none()
             }
             Message::LoadScreenSettings => {
                 self.state = AppState::Settings;
-                Command::none()
+                Task::none()
             }
         }
     }
 
-    fn view(&self) -> Element<'_, Self::Message, Self::Theme, iced::Renderer> {
+    fn view(&self) -> Element<'_, Message, Theme, iced::Renderer> {
         let content: Element<_> = match &self.state {
             AppState::Loading => text("Loading...").into(),
             AppState::Loaded(_input_value) => {
@@ -402,7 +399,7 @@ impl Application for App {
                     button("Refresh").on_press(Message::Load),
                     button("Settings").on_press(Message::LoadScreenSettings)
                 ]
-                .align_items(Alignment::Center)
+                .align_y(Alignment::Center)
                 .spacing(18);
                 match self.todos.len() {
                     0 => column![control_buttons, text("No todos!")]
@@ -413,7 +410,7 @@ impl Application for App {
                         scrollable(keyed_column(self.todos.iter().map(|todo| {
                             (
                                 todo.todo.id,
-                                todo.view().map(move |message| {
+                                hierarchy_view(todo).map(move |message| {
                                     Message::TodoMessage(todo.todo.id, message)
                                 }),
                             )
@@ -428,7 +425,7 @@ impl Application for App {
                     button("Refresh").on_press(Message::Load),
                     button("Settings").on_press(Message::LoadScreenSettings),
                 ]
-                .align_items(Alignment::Center)
+                .align_y(Alignment::Center)
                 .spacing(18),
                 text(format!("Error: {}", error))
             ]
@@ -442,7 +439,7 @@ impl Application for App {
                         Message::LoadScreenAddNewTodo(new_name, description.clone(), *parent_id)
                     }),
                 ]
-                .align_items(Alignment::Center)
+                .align_y(Alignment::Center)
                 .spacing(10),
                 row![
                     text("Description:"),
@@ -450,7 +447,7 @@ impl Application for App {
                         Message::LoadScreenAddNewTodo(name.clone(), new_description, *parent_id)
                     }),
                 ]
-                .align_items(Alignment::Center)
+                .align_y(Alignment::Center)
                 .spacing(10),
                 button("Submit").on_press(Message::SubmitNewTodo(
                     name.clone(),
@@ -467,14 +464,14 @@ impl Application for App {
                     text_input("Server url", self.settings.server_url.as_str())
                         .on_input(Message::ChangeUrl),
                 ]
-                .align_items(Alignment::Center)
+                .align_y(Alignment::Center)
                 .spacing(10),
                 row![
                     text("Password:"),
                     text_input("Password", self.settings.password.as_str())
                         .on_input(Message::ChangePassword),
                 ]
-                .align_items(Alignment::Center)
+                .align_y(Alignment::Center)
                 .spacing(10),
                 button("Save").on_press(Message::SaveSettings)
             ]
@@ -489,50 +486,6 @@ impl Application for App {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct TodoHierarchy {
-    pub todo: Todo,
-    pub children: Vec<TodoHierarchy>,
-}
-
-pub fn build_hierarchy(mut todos: Vec<Todo>) -> Vec<TodoHierarchy> {
-    let mut todo_map: IndexMap<i64, TodoHierarchy> = IndexMap::new();
-
-    todos.reverse();
-    for todo in todos {
-        let id = todo.id;
-        todo_map.insert(
-            id,
-            TodoHierarchy {
-                todo,
-                children: Vec::new(),
-            },
-        );
-    }
-
-    let mut root_todos: Vec<TodoHierarchy> = Vec::new();
-
-    // Collect all the keys first
-    let todo_ids: Vec<i64> = todo_map.keys().copied().collect();
-
-    for id in todo_ids {
-        if let Some(hierarchy) = todo_map.swap_remove(&id) {
-            // if it has a parent
-            if let Some(parent_id) = hierarchy.todo.parent_id {
-                // if the parent is available in todo_map
-                if let Some(parent_hierarchy) = todo_map.get_mut(&parent_id) {
-                    parent_hierarchy.children.push(hierarchy);
-                }
-            } else {
-                root_todos.push(hierarchy);
-            }
-        }
-    }
-
-    root_todos.reverse();
-
-    root_todos
-}
 pub fn add_to_hierarchy(hierarchy: &mut Vec<TodoHierarchy>, todo: Todo) {
     fn try_add_to_hierarchy(hierarchy: &mut Vec<TodoHierarchy>, todo: Todo) -> bool {
         for sub_hierarchy in hierarchy {
@@ -558,78 +511,45 @@ enum TodoMessage {
     AddChild(i64),
 }
 
-impl TodoHierarchy {
-    pub fn new(todo: Todo) -> TodoHierarchy {
-        TodoHierarchy {
-            todo,
-            children: Vec::new(),
-        }
-    }
-
-    fn view(&self) -> Element<'_, TodoMessage> {
-        let name_and_desc = if let Some(desc) = &self.todo.description {
-            if desc != "" {
-                column![text(&self.todo.name).size(16), text(desc).size(12)].padding([0, 16, 0, 0])
-            } else {
-                column![text(&self.todo.name).size(16)].padding([0, 16, 0, 0])
-            }
+fn hierarchy_view(hierarchy: &TodoHierarchy) -> Element<'_, TodoMessage> {
+    let name_and_desc = if let Some(desc) = &hierarchy.todo.description {
+        if desc != "" {
+            column![text(&hierarchy.todo.name).size(16), text(desc).size(12)].padding([0, 16])
         } else {
-            column![text(&self.todo.name).size(16)].padding([0, 16, 0, 0])
-        };
-        let mut col: Column<TodoMessage> = column![row![
-            checkbox("", self.todo.done).on_toggle(|state| TodoMessage::Done(self.todo.id, state)),
-            name_and_desc,
-            (button(delete_icon()))
-                .on_press(TodoMessage::Delete(self.todo.id))
-                .width(28)
-                .height(28)
-                .padding(2),
-            button(add_icon())
-                .on_press(TodoMessage::AddChild(self.todo.id))
-                .width(28)
-                .height(28)
-                .padding(2)
-        ]
-        .align_items(Alignment::Center)
-        .spacing(8)]
-        .spacing(8);
-
-        // Add the children recursively
-        for child in &self.children {
-            col = col.push(
-                Container::new(child.view())
-                    .padding([0, 0, 0, 8])
-                    .width(Length::Fill),
-            );
+            column![text(&hierarchy.todo.name).size(16)].padding([0, 16])
         }
+    } else {
+        column![text(&hierarchy.todo.name).size(16)].padding([0, 16])
+    };
+    let mut col: Column<TodoMessage> = column![row![
+        checkbox("", hierarchy.todo.done)
+            .on_toggle(|state| TodoMessage::Done(hierarchy.todo.id, state)),
+        name_and_desc,
+        (button(delete_icon()))
+            .on_press(TodoMessage::Delete(hierarchy.todo.id))
+            .width(28)
+            .height(28)
+            .padding(2),
+        button(add_icon())
+            .on_press(TodoMessage::AddChild(hierarchy.todo.id))
+            .width(28)
+            .height(28)
+            .padding(2)
+    ]
+    .align_y(Alignment::Center)
+    .spacing(8)]
+    .spacing(8);
 
-        Container::new(col).padding(10).width(Length::Fill).into()
-    }
-    pub fn get_hierarchy_by_id(
-        hierarchies: &mut Vec<TodoHierarchy>,
-        id: i64,
-    ) -> Option<&mut TodoHierarchy> {
-        for hierarchy in hierarchies {
-            if hierarchy.todo.id == id {
-                return Some(hierarchy);
-            } else if let Some(found) =
-                TodoHierarchy::get_hierarchy_by_id(&mut hierarchy.children, id)
-            {
-                return Some(found);
-            }
-        }
-        None
+    // Add the children recursively
+    for child in &hierarchy.children {
+        col = col.push(
+            Container::new(hierarchy_view(child))
+                .padding([0, 8])
+                .width(Length::Fill),
+        );
     }
 
-    pub fn toggle_with_children(&mut self, state: bool) {
-        // Set the current todo's state
-        self.todo.done = state;
-
-        // Recursively set the state for all children
-        for child in &mut self.children {
-            child.toggle_with_children(state);
-        }
-    }
+    Container::new(col).padding(10).width(Length::Fill).into()
 }
 
 fn main() -> iced::Result {
@@ -638,25 +558,16 @@ fn main() -> iced::Result {
     });
 
     println!("Using server url: {}", settings.server_url);
+    println!("Using palette: {}", settings.palette);
 
-    App::run(Settings {
-        antialiasing: true,
-        flags: settings,
-        default_font: Font::DEFAULT,
-        default_text_size: Pixels(16.),
-        id: None,
-        window: iced::window::Settings {
-            size: Size {
-                width: 800.,
-                height: 350.,
-            },
-            position: iced::window::Position::Centered,
-            min_size: Some(Size {
-                width: 150.,
-                height: 150.,
-            }),
-            ..Default::default()
-        },
-        fonts: vec![],
-    })
+    iced::application(App::title, App::update, App::view)
+        .default_font(Font::DEFAULT)
+        .window_size(Size {
+            width: 800.,
+            height: 350.,
+        })
+        .theme(App::theme)
+        .position(iced::window::Position::Centered)
+        .antialiasing(true)
+        .run_with(|| App::new(settings.server_url, settings.password, settings.palette))
 }

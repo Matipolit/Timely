@@ -1,0 +1,23 @@
+{% macro todo_inner(todo) %}
+  <div id="todo_{{ todo.id }}">
+    <input onChange="toggle_todo({{ todo.id }})" type="checkbox" {% if todo.done %}checked{% endif%}/>
+    {{ todo.name }}
+    {{ todo.description }}
+    <button onClick="{
+      show_window();
+      adding_id = {{ todo.id }};
+    }">+</button>
+    <button onClick="delete_todo({{ todo.id }})">delete</button>
+  </div>
+{% endmacro todo_inner %}
+
+{% macro todo(todo_h) %}
+  {{ self::todo_inner(todo=todo_h.todo) }}
+  {% for child in todo_h.children %}
+    <div class="ident">
+      {{ self::todo(todo_h=child) }}
+    </div>
+  {% else %}
+  {% endfor %}
+{% endmacro todo%}
+

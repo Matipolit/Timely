@@ -1,0 +1,130 @@
+{% import "macros.html" as macros %}
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Timely Todo App</title>
+    <style>
+      .ident{
+        margin-left: 24px;
+      }
+      #window{
+        z-index: 2;
+        max-width: 550px;
+        margin: 96px auto;
+        padding: 16px;
+        box-shadow: 0 0 8px 0 rgba(0, 0, 0, 0.2);
+        display: none;
+        position: absolute;
+        background-color: white;
+      }
+      #window-background {
+        position: fixed;
+        z-index: 1;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        overflow: auto;
+        background-color: #0006;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    {% if authenticated %}
+      <h1>Your Todos</h1>
+      <div id="todo-list">
+        {% for todo_h in todos %}
+          {{ macros::todo(todo_h=todo_h) }}
+        {% endfor %}
+      </div>
+      <div id="window-background">
+        <div id="window">
+          <button onClick="hide_window()">X</button>
+          <form id="create-todo-form">
+            <input type="text" name="name" placeholder="Todo name" required />
+            <input type="text" name="description" placeholder="Description" />
+            <button type="submit">Add Todo</button>
+          </form>
+        </div>
+      </div>
+      <button onClick="{
+        show_window();
+        adding_id = null;
+      }">+</button>
+      <button id="logout-button">Logout</button>
+      <script>
+        const add_window = document.getElementById("window");
+        const win_bg = document.getElementById("window-background");
+        let adding_id = null;
+
+        async function delete_todo(id){
+          const res = await fetch("/todos", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: `${id}`,
+          })
+          console.log(res);
+          if (res.ok){
+            document.getElementById(`todo_${id}`).remove();
+          }
+        }
+
+        function show_window(){
+          add_window.style.display = "block";
+          win_bg.style.display = "block";
+        }
+
+        function hide_window(){
+          add_window.style.display = "none";
+          win_bg.style.display = "none";
+        }
+
+        async function toggle_todo(id){
+          const res = await fetch("/todos/toggle", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: `${id}`,
+          })
+          console.log(res);
+          if (res.ok){
+            window.location.reload();
+          }
+        }
+
+        document
+          .getElementById("create-todo-form")
+          .addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const name = formData.get("name");
+            const description = formData.get("description");
+            const parent_id = adding_id;
+            const res = await fetch("/todos", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name, description, parent_id }),
+            });
+            console.log(res);
+            if (res.ok) {
+              window.location.reload();
+            }
+          });
+        document
+          .getElementById("logout-button")
+          .addEventListener("click", () => {
+            window.location.href = "/logout";
+          });
+        //loadTodos();
+      </script>
+    {% else %}
+      <h1>Login</h1>
+      <form action="/login" method="POST">
+        <input type="password" name="password" placeholder="Enter password" required />
+        <button type="submit">Login</button>
+      </form>
+    {% endif %}
+  </body>
+</html>
+
