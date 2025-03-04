@@ -4,11 +4,7 @@ use iced::widget::{
     button, checkbox, column, container, keyed_column, row, scrollable, text, text_input, Column,
     Container, Text,
 };
-use iced::{
-    alignment, font, Alignment, Application, Element, Font, Length, Pixels, Settings, Size, Task,
-    Theme,
-};
-use indexmap::IndexMap;
+use iced::{alignment, font, Alignment, Element, Font, Length, Size, Task, Theme};
 use reqwest::{self, Client};
 use serde::{Deserialize, Serialize};
 
@@ -116,11 +112,6 @@ struct TodoToSend {
     parent_id: Option<i64>,
 }
 
-#[derive(Serialize)]
-struct TodoToDelete {
-    id: i64,
-}
-
 #[derive(Debug, Clone)]
 enum Error {
     APIError,
@@ -140,6 +131,7 @@ enum AppState {
     AddingNewTodo(String, String, Option<i64>),
     Settings,
     Errored(String),
+    About,
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +140,7 @@ enum Message {
     Load,
     LoadScreenAddNewTodo(String, String, Option<i64>),
     LoadScreenSettings,
+    LoadScreenAbout,
     SubmitNewTodo(String, String, Option<i64>),
     SubmittedNewTodo(Result<Todo, Error>),
     GoBackToMain,
@@ -262,6 +255,7 @@ impl App {
             AppState::Errored { .. } => "Error - ",
             AppState::AddingNewTodo(..) => "Adding new task - ",
             AppState::Settings => "Settings - ",
+            AppState::About => "About - ",
         };
 
         format!("{subtitle}Timely")
@@ -382,6 +376,10 @@ impl App {
                 self.state = AppState::Settings;
                 Task::none()
             }
+            Message::LoadScreenAbout => {
+                self.state = AppState::About;
+                Task::none()
+            }
         }
     }
 
@@ -397,7 +395,8 @@ impl App {
                         None
                     )),
                     button("Refresh").on_press(Message::Load),
-                    button("Settings").on_press(Message::LoadScreenSettings)
+                    button("Settings").on_press(Message::LoadScreenSettings),
+                    button("About").on_press(Message::LoadScreenAbout)
                 ]
                 .align_y(Alignment::Center)
                 .spacing(18);
@@ -474,6 +473,17 @@ impl App {
                 .align_y(Alignment::Center)
                 .spacing(10),
                 button("Save").on_press(Message::SaveSettings)
+            ]
+            .spacing(10)
+            .into(),
+            AppState::About => column![
+                row![
+                    text("Timely").size(28),
+                    button("Go back").on_press(Message::GoBackToMain),
+                ]
+                .align_y(Alignment::Center)
+                .spacing(18),
+                text(format!("Version: {}", env!("CARGO_PKG_VERSION"))),
             ]
             .spacing(10)
             .into(),

@@ -61,9 +61,11 @@ type DigestedHash =
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
-        .init();
+    if cfg!(debug_assertions) {
+        tracing_subscriber::fmt()
+            .with_max_level(Level::TRACE)
+            .init();
+    }
     dotenv().expect(".env file not found");
 
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");

@@ -1,12 +1,12 @@
 [package]
 name = "timely-app"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-iced = {version = "0.13.1", features=["tokio"]}
+iced = {version = "0.13", features=["tokio"]}
 timely-lib = { path = "../timely-lib" }
 log = "0.4"
 reqwest = {version = "0.12.9", features=["json"]}

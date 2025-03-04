@@ -4845,7 +4845,7 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum 0.8.1",
@@ -4869,7 +4869,7 @@ dependencies = [
 
 [[package]]
 name = "timely-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "config",
  "iced",
