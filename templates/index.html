@@ -59,8 +59,9 @@
         const win_bg = document.getElementById("window-background");
         let adding_id = null;
 
+        const base_url = {% if subpath %}"/timely" {% else %} "" {% endif %};
         async function delete_todo(id){
-          const res = await fetch("/todos", {
+          const res = await fetch(base_url + "/todos", {
             method: "DELETE",
             headers: { "Content-Type": "application/json" },
             body: `${id}`,
@@ -82,7 +83,7 @@
         }
 
         async function toggle_todo(id){
-          const res = await fetch("/todos/toggle", {
+          const res = await fetch(base_url + "/todos/toggle", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: `${id}`,
@@ -101,7 +102,7 @@
             const name = formData.get("name");
             const description = formData.get("description");
             const parent_id = adding_id;
-            const res = await fetch("/todos", {
+            const res = await fetch(base_url + "/todos", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ name, description, parent_id }),
@@ -114,13 +115,14 @@
         document
           .getElementById("logout-button")
           .addEventListener("click", () => {
-            window.location.href = "/logout";
+            window.location.href = base_url + "/logout";
           });
         //loadTodos();
       </script>
     {% else %}
       <h1>Login</h1>
-      <form action="/login" method="POST">
+
+      <form action={% if subpath %}"/timely/login"{% else %}"/login"{% endif %} method="POST">
         <input type="password" name="password" placeholder="Enter password" required />
         <button type="submit">Login</button>
       </form>

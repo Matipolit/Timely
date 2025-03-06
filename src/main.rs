@@ -21,7 +21,7 @@ use sha2::{
 use sqlx::postgres::PgPool;
 use std::env;
 use time;
-use timely_lib::{build_hierarchy, Todo};
+use timely_lib::{build_hierarchy, Done, Todo};
 use tower_http::trace::{
     DefaultMakeSpan, DefaultOnFailure, DefaultOnRequest, DefaultOnResponse, TraceLayer,
 };
@@ -36,6 +36,7 @@ struct AppState {
     pool: PgPool,
     hashed_password: DigestedHash,
     templates: Tera,
+    running_on_subpath: bool,
 }
 
 #[derive(Deserialize)]
@@ -81,10 +82,15 @@ async fn main() {
     // Initialize Tera – assuming your templates are in a folder named "templates"
     let templates = Tera::new("templates/**/*").expect("Error initializing Tera");
 
+    let run_on_subpath_env = env::var("RUN_ON_SUBPATH");
+
+    let run_on_subpath = run_on_subpath_env.is_ok_and(|run| run.to_lowercase() == "true");
+
     let app_state = AppState {
         pool,
         hashed_password,
         templates,
+        running_on_subpath: run_on_subpath,
     };
 
     // Build the app with both web and API routes.
@@ -108,16 +114,10 @@ async fn main() {
         )
         .with_state(app_state);
     let listener = tokio::net::TcpListener::bind(&service_url).await.unwrap();
-    let run_on_subpath = &env::var("RUN_ON_SUBPATH");
-    if run_on_subpath.is_ok() {
-        if run_on_subpath.as_ref().unwrap().to_lowercase() == "true" {
-            let subpath_router = Router::new().nest("/timely", app);
-            println!("Listening on http://{}/timely", service_url);
-            axum::serve(listener, subpath_router).await.unwrap()
-        } else {
-            println!("Listening on http://{}", service_url);
-            axum::serve(listener, app).await.unwrap()
-        }
+    if run_on_subpath {
+        let subpath_router = Router::new().nest("/timely", app);
+        println!("Listening on http://{}/timely", service_url);
+        axum::serve(listener, subpath_router).await.unwrap()
     } else {
         println!("Listening on http://{}", service_url);
         axum::serve(listener, app).await.unwrap()
@@ -276,19 +276,32 @@ async fn toggle_todo(
     let provided = extract_provided(&query, &cookies);
     if provided.is_some_and(|p| authenticate(&state.hashed_password, &p)) {
         let toggle_result = sqlx::query_as!(
-            Todo,
+            Done,
             r#"
-            WITH RECURSIVE todo_hierarchy AS (
-                SELECT id FROM todos WHERE id = $1
+            WITH RECURSIVE updated_parent AS (
+                -- Toggle parent's state and return the new value
+                UPDATE todos
+                SET done = NOT done
+                WHERE id = $1
+                RETURNING done
+            ),
+            todo_hierarchy AS (
+                -- Recursively select all children (and grandchildren, etc.)
+                SELECT id FROM todos WHERE parent_id = $1
                 UNION ALL
-                SELECT t.id FROM todos t
+                SELECT t.id
+                FROM todos t
                 INNER JOIN todo_hierarchy th ON t.parent_id = th.id
+            ),
+            updated_children AS (
+                -- Update all descendants to match parent's new state
+                UPDATE todos
+                SET done = (SELECT done FROM updated_parent)
+                WHERE id IN (SELECT id FROM todo_hierarchy)
+                RETURNING id
             )
-            UPDATE todos
-            SET done = NOT done
-            WHERE id IN (SELECT id FROM todo_hierarchy)
-            RETURNING id, name, done, description, parent_id
-
+            -- Return the parent's new done state.
+            SELECT done FROM updated_parent;
             "#,
             todo_id
         )
@@ -296,7 +309,7 @@ async fn toggle_todo(
         .await;
 
         match toggle_result {
-            Ok(todo) => Ok(Json(todo.done)),
+            Ok(done) => Ok(Json(done.done)),
             Err(err) => Err(internal_error(err)),
         }
     } else {
@@ -332,6 +345,7 @@ async fn web_index(cookies: CookieJar, State(state): State<AppState>) -> impl In
         context.insert("todos", &hierarchy);
     }
     context.insert("authenticated", &is_auth);
+    context.insert("subpath", &state.running_on_subpath);
     // You can also pass additional variables as needed.
     let rendered = state
         .templates
@@ -340,7 +354,6 @@ async fn web_index(cookies: CookieJar, State(state): State<AppState>) -> impl In
     Html(rendered)
 }
 
-#[axum::debug_handler]
 /// POST "/login" – processes the login form. If the password is correct,
 /// it sets a cookie (with the hashed password in hex) and redirects to "/".
 async fn login(
@@ -348,6 +361,11 @@ async fn login(
     State(state): State<AppState>,
     Form(form): Form<LoginForm>,
 ) -> impl IntoResponse {
+    let redirect = if state.running_on_subpath {
+        Redirect::to("/timely")
+    } else {
+        Redirect::to("/")
+    };
     if authenticate(&state.hashed_password, &form.password) {
         let cookie = Cookie::build(("auth", form.password))
             .path("/")
@@ -355,19 +373,24 @@ async fn login(
             .http_only(false);
 
         let cookies = cookies.add(cookie);
-        (cookies, Redirect::to("/"))
+        (cookies, redirect)
     } else {
         // On failed login, simply redirect back.
-        (cookies, Redirect::to("/"))
+        (cookies, redirect)
     }
 }
 
 /// GET "/logout" – clears the auth cookie and redirects to "/".
-async fn logout(cookies: CookieJar) -> impl IntoResponse {
+async fn logout(cookies: CookieJar, State(state): State<AppState>) -> impl IntoResponse {
     let cookie = Cookie::build(("auth", ""))
         .path("/")
         // Set cookie to expire immediately.
         .max_age(time::Duration::seconds(0));
     let cookies = cookies.remove(cookie);
-    (cookies, Redirect::to("/"))
+    let redirect = if state.running_on_subpath {
+        Redirect::to("/timely")
+    } else {
+        Redirect::to("/")
+    };
+    (cookies, redirect)
 }

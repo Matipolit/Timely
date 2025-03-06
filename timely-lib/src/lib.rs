@@ -10,6 +10,11 @@ pub struct Todo {
     pub parent_id: Option<i64>,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct Done {
+    pub done: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct TodoHierarchy {
     pub todo: Todo,
