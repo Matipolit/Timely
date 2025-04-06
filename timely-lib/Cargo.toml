@@ -1,8 +1,10 @@
 [package]
 name="timely-lib"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
+sqlx = {version = "0.8.3", features = ["runtime-tokio", "postgres", "time" ]}
 serde = { version = "1", features = ["derive"]}
 indexmap = "2"
+time = {version="0.3", features = ["serde"]}

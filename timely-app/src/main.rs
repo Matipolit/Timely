@@ -5,6 +5,7 @@ use iced::widget::{
     Container, Text,
 };
 use iced::{alignment, font, Alignment, Element, Font, Length, Size, Task, Theme};
+use iced_aw::{date_picker::Date, widget::helpers::date_picker};
 use reqwest::{self, Client};
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +15,7 @@ use std::fmt::Debug;
 use std::fs;
 use std::path::PathBuf;
 
-use timely_lib::{build_hierarchy, Todo, TodoHierarchy};
+use timely_lib::{build_hierarchy, Todo, TodoHierarchy, TodoToSend};
 
 // Settings
 
@@ -105,13 +106,6 @@ fn delete_icon() -> Text<'static> {
     icon('\u{F1F8}')
 }
 
-#[derive(Serialize)]
-struct TodoToSend {
-    name: String,
-    description: String,
-    parent_id: Option<i64>,
-}
-
 #[derive(Debug, Clone)]
 enum Error {
     APIError,
@@ -128,7 +122,8 @@ impl From<reqwest::Error> for Error {
 enum AppState {
     Loading,
     Loaded(String),
-    AddingNewTodo(String, String, Option<i64>),
+    // bool - title, description, parent id, has date, date
+    AddingNewTodo(String, String, Option<i64>, bool),
     Settings,
     Errored(String),
     About,
@@ -138,10 +133,14 @@ enum AppState {
 enum Message {
     Loaded(Result<Vec<Todo>, Error>),
     Load,
-    LoadScreenAddNewTodo(String, String, Option<i64>),
+    // title, description, parent id, has date
+    LoadScreenAddNewTodo(String, String, Option<i64>, bool),
+    // update just the date
+    LoadScreenAddNewTodoUpdateDate(Date),
     LoadScreenSettings,
     LoadScreenAbout,
-    SubmitNewTodo(String, String, Option<i64>),
+    // title, description, parent id, date
+    SubmitNewTodo(String, String, Option<i64>, Option<Date>),
     SubmittedNewTodo(Result<Todo, Error>),
     GoBackToMain,
     TodoToggled(Result<(i64, bool), Error>),
@@ -218,6 +217,7 @@ struct App {
     client: Client,
     palette: Palette,
     settings: AppSettings,
+    selected_date: Date,
 }
 
 impl App {
@@ -243,6 +243,7 @@ impl App {
                 palette,
                 password,
             },
+            selected_date: Date::today(),
         };
 
         (app, command)
@@ -288,20 +289,39 @@ impl App {
                 Message::Loaded,
             ),
             Message::None => Task::none(),
-            Message::LoadScreenAddNewTodo(title, description, parent_id) => {
-                self.state = AppState::AddingNewTodo(title, description, parent_id);
+            Message::LoadScreenAddNewTodo(title, description, parent_id, has_date) => {
+                self.state = AppState::AddingNewTodo(title, description, parent_id, has_date);
+                Task::none()
+            }
+            Message::LoadScreenAddNewTodoUpdateDate(date) => {
+                self.selected_date = date;
                 Task::none()
             }
             Message::GoBackToMain => {
                 self.state = AppState::Loaded("".to_owned());
                 Task::none()
             }
-            Message::SubmitNewTodo(name, description, parent_id) => Task::perform(
+            Message::SubmitNewTodo(name, description, parent_id, date) => Task::perform(
                 submit_new_todo(
                     TodoToSend {
                         name,
                         description,
                         parent_id,
+                        date: match date {
+                            Some(some_date) => Some(
+                                time::Date::from_calendar_date(
+                                    some_date.year,
+                                    time::Month::nth_next(
+                                        time::Month::January,
+                                        some_date.month as u8 - 1,
+                                    ),
+                                    some_date.day as u8,
+                                )
+                                .unwrap(),
+                            ),
+
+                            None => None,
+                        },
                     },
                     self.client.clone(),
                     self.settings.server_url.clone(),
@@ -339,8 +359,12 @@ impl App {
                             Message::Loaded,
                         ),
                         TodoMessage::AddChild(parent_id) => {
-                            self.state =
-                                AppState::AddingNewTodo("".into(), "".into(), Some(parent_id));
+                            self.state = AppState::AddingNewTodo(
+                                "".into(),
+                                "".into(),
+                                Some(parent_id),
+                                false,
+                            );
                             Task::none()
                         }
                     }
@@ -392,7 +416,8 @@ impl App {
                     button("Add new").on_press(Message::LoadScreenAddNewTodo(
                         "".into(),
                         "".into(),
-                        None
+                        None,
+                        false,
                     )),
                     button("Refresh").on_press(Message::Load),
                     button("Settings").on_press(Message::LoadScreenSettings),
@@ -430,12 +455,17 @@ impl App {
             ]
             .spacing(24)
             .into(),
-            AppState::AddingNewTodo(name, description, parent_id) => column![
+            AppState::AddingNewTodo(name, description, parent_id, has_date) => column![
                 button("Go back").on_press(Message::GoBackToMain),
                 row![
                     text("Name:"),
                     text_input("Task name", &name).on_input(|new_name| {
-                        Message::LoadScreenAddNewTodo(new_name, description.clone(), *parent_id)
+                        Message::LoadScreenAddNewTodo(
+                            new_name,
+                            description.clone(),
+                            *parent_id,
+                            *has_date,
+                        )
                     }),
                 ]
                 .align_y(Alignment::Center)
@@ -443,15 +473,49 @@ impl App {
                 row![
                     text("Description:"),
                     text_input("Task description", &description).on_input(|new_description| {
-                        Message::LoadScreenAddNewTodo(name.clone(), new_description, *parent_id)
+                        Message::LoadScreenAddNewTodo(
+                            name.clone(),
+                            new_description,
+                            *parent_id,
+                            *has_date,
+                        )
                     }),
                 ]
                 .align_y(Alignment::Center)
                 .spacing(10),
+                checkbox("Include date", *has_date).on_toggle(|new_state| {
+                    Message::LoadScreenAddNewTodo(
+                        name.clone(),
+                        description.clone(),
+                        *parent_id,
+                        new_state,
+                    )
+                }),
+                date_picker(
+                    *has_date,
+                    self.selected_date,
+                    button("Set date").on_press(Message::LoadScreenAddNewTodo(
+                        name.clone(),
+                        description.clone(),
+                        *parent_id,
+                        true
+                    )),
+                    Message::LoadScreenAddNewTodo(
+                        name.clone(),
+                        description.clone(),
+                        *parent_id,
+                        false,
+                    ),
+                    move |new_date| { Message::LoadScreenAddNewTodoUpdateDate(new_date,) }
+                ),
                 button("Submit").on_press(Message::SubmitNewTodo(
                     name.clone(),
                     description.clone(),
-                    *parent_id
+                    *parent_id,
+                    match has_date {
+                        true => Some(self.selected_date),
+                        false => None,
+                    },
                 ))
             ]
             .spacing(10)
@@ -484,6 +548,7 @@ impl App {
                 .align_y(Alignment::Center)
                 .spacing(18),
                 text(format!("Version: {}", env!("CARGO_PKG_VERSION"))),
+                text("Made with <3 by Mateusz Polito")
             ]
             .spacing(10)
             .into(),

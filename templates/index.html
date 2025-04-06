@@ -3,10 +3,40 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
     <title>Timely Todo App</title>
     <style>
+      body {
+        font-family: "sans-serif";
+      }
+      p {
+        margin: 0;
+      }
+      button {
+        font-family: "sans-serif";
+      }
+      input {
+        font-family: "sans-serif";
+      }
       .ident{
         margin-left: 24px;
+      }
+      .todo {
+        display: flex;
+        align-content: start;
+        align-items: center;
+        gap: 16px;
+        margin: 8px;
+        padding: 8px;
+        border-radius: 2px;
+        background-color: #00000022;
+      }
+      .buttons {
+        display: flex;
+        gap: 8px;
+        height: min-content;
+        align-items: center;
       }
       #window{
         z-index: 2;
@@ -15,7 +45,6 @@
         padding: 16px;
         box-shadow: 0 0 8px 0 rgba(0, 0, 0, 0.2);
         display: none;
-        position: absolute;
         background-color: white;
       }
       #window-background {
@@ -29,11 +58,32 @@
         background-color: #0006;
         display: none;
       }
+      #create-todo-form{
+        margin: 16px 0;
+        display: flex;
+        gap: 8px;
+        flex-direction: column;
+      }
+      #top-bar {
+        display: flex;
+        gap: 16px;
+        height: min-content;
+        align-items: center;
+      }
     </style>
   </head>
   <body>
     {% if authenticated %}
-      <h1>Your Todos</h1>
+      <div id="top-bar">
+        <h1>Your Todos</h1>
+        <div class="buttons">
+          <button onClick="{
+            show_window();
+            adding_id = null;
+          }">+</button>
+          <button id="logout-button">Logout</button>
+        </div>
+      </div>
       <div id="todo-list">
         {% for todo_h in todos %}
           {{ macros::todo(todo_h=todo_h) }}
@@ -41,19 +91,18 @@
       </div>
       <div id="window-background">
         <div id="window">
-          <button onClick="hide_window()">X</button>
+          <button id="close" onClick="hide_window()">X</button>
           <form id="create-todo-form">
-            <input type="text" name="name" placeholder="Todo name" required />
-            <input type="text" name="description" placeholder="Description" />
+            <label for="name">Name</label>
+            <input id="name" type="text" name="name" placeholder="Todo name" required />
+            <label for="desc">Description</label>
+            <input id="desc" type="text" name="description" placeholder="Description" />
+            <label for="date">Date</label>
+            <input id="date" type="date" name="date" />
             <button type="submit">Add Todo</button>
           </form>
         </div>
       </div>
-      <button onClick="{
-        show_window();
-        adding_id = null;
-      }">+</button>
-      <button id="logout-button">Logout</button>
       <script>
         const add_window = document.getElementById("window");
         const win_bg = document.getElementById("window-background");
@@ -68,7 +117,7 @@
           })
           console.log(res);
           if (res.ok){
-            document.getElementById(`todo_${id}`).remove();
+            document.getElementById(`todo_wrapper_${id}`).remove();
           }
         }
 
@@ -101,11 +150,13 @@
             const formData = new FormData(e.target);
             const name = formData.get("name");
             const description = formData.get("description");
+            const date = formData.get("date");
+            console.log(date);
             const parent_id = adding_id;
             const res = await fetch(base_url + "/todos", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ name, description, parent_id }),
+              body: JSON.stringify({ name, description, parent_id, date }),
             });
             console.log(res);
             if (res.ok) {

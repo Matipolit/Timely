@@ -20,8 +20,8 @@ use sha2::{
 };
 use sqlx::postgres::PgPool;
 use std::env;
-use time;
-use timely_lib::{build_hierarchy, Done, Todo};
+use time::{self, Date, Month};
+use timely_lib::{build_hierarchy, month_num_to_month, Done, Todo};
 use tower_http::trace::{
     DefaultMakeSpan, DefaultOnFailure, DefaultOnRequest, DefaultOnResponse, TraceLayer,
 };
@@ -44,11 +44,18 @@ struct CreateTodo {
     name: String,
     description: Option<String>,
     parent_id: Option<i64>,
+    date: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct PasswordQuery {
     password: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct DateQuery {
+    date_less: Option<Date>,
+    date_more: Option<Date>,
 }
 
 // For the login form (from the web UI)
@@ -144,6 +151,7 @@ fn extract_provided(query: &PasswordQuery, cookies: &CookieJar) -> Option<String
 /// API: Get all todos.
 async fn get_todos(
     Query(query): Query<PasswordQuery>,
+    Query(date_query): Query<DateQuery>,
     cookies: CookieJar,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Todo>>, (StatusCode, String)> {
@@ -151,32 +159,81 @@ async fn get_todos(
     let provided = extract_provided(&query, &cookies);
     if provided.is_some_and(|p| authenticate(&state.hashed_password, &p)) {
         println!("getting todos inner");
-        get_todos_json_inner(&state.pool).await
+        get_todos_json_inner(&state.pool, date_query.date_less, date_query.date_more).await
     } else {
         Err((StatusCode::UNAUTHORIZED, "Failed authentication".to_owned()))
     }
 }
 
-async fn get_todos_inner(pool: &PgPool) -> Result<Vec<Todo>, (StatusCode, String)> {
-    let todos = sqlx::query_as!(
-        Todo,
-        r#"
-                SELECT id, name, done, description, parent_id 
-                FROM todos
-                ORDER BY id
-            "#
-    )
-    .fetch_all(pool)
-    .await;
-
+async fn get_todos_inner(
+    pool: &PgPool,
+    date_less: Option<Date>,
+    date_more: Option<Date>,
+) -> Result<Vec<Todo>, (StatusCode, String)> {
+    let todos = if date_less.is_none() && date_more.is_none() {
+        sqlx::query_as!(
+            Todo,
+            r#"
+                        SELECT id, name, done, description, parent_id, date
+                        FROM todos
+                        ORDER BY id
+                    "#
+        )
+        .fetch_all(pool)
+        .await
+    } else if date_less.is_some() {
+        sqlx::query_as!(
+            Todo,
+            r#"
+                        SELECT id, name, done, description, parent_id, date
+                        FROM todos
+                        WHERE date <= $1
+                        ORDER BY id
+                    "#,
+            date_less.unwrap()
+        )
+        .fetch_all(pool)
+        .await
+    } else if date_more.is_some() {
+        sqlx::query_as!(
+            Todo,
+            r#"
+                        SELECT id, name, done, description, parent_id, date
+                        FROM todos
+                        WHERE date >= $1
+                        ORDER BY id
+                    "#,
+            date_more.unwrap()
+        )
+        .fetch_all(pool)
+        .await
+    } else {
+        sqlx::query_as!(
+            Todo,
+            r#"
+                        SELECT id, name, done, description, parent_id, date
+                        FROM todos
+                        WHERE date BETWEEN $1 AND $2
+                        ORDER BY id
+                    "#,
+            date_more.unwrap(),
+            date_less.unwrap()
+        )
+        .fetch_all(pool)
+        .await
+    };
     match todos {
         Ok(todos_vec) => Ok(todos_vec),
         Err(err) => Err(internal_error(err)),
     }
 }
 /// API: Helper function to get todos.
-async fn get_todos_json_inner(pool: &PgPool) -> Result<Json<Vec<Todo>>, (StatusCode, String)> {
-    let todos = get_todos_inner(pool).await;
+async fn get_todos_json_inner(
+    pool: &PgPool,
+    date_less: Option<Date>,
+    date_more: Option<Date>,
+) -> Result<Json<Vec<Todo>>, (StatusCode, String)> {
+    let todos = get_todos_inner(pool, date_less, date_more).await;
     match todos {
         Ok(todos_vec) => Ok(Json(todos_vec)),
         Err(err) => Err(err),
@@ -192,17 +249,36 @@ async fn create_todo(
 ) -> Result<Json<Todo>, (StatusCode, String)> {
     println!("creating todo!");
     let provided = extract_provided(&query, &cookies);
+    let date_from_payload_opt = payload.date;
+    let converted_date: Option<Date> = if let Some(date_from_payload) = date_from_payload_opt {
+        let trimmed_date = date_from_payload.trim().to_owned();
+        if trimmed_date != "" {
+            tracing::debug!("Date is: {}", &trimmed_date);
+            let mut split_date = trimmed_date.split("-");
+            let year: i32 = split_date.next().unwrap().parse().unwrap();
+            let month: Option<Month> =
+                month_num_to_month(split_date.next().unwrap().parse().unwrap());
+            let day: u8 = split_date.next().unwrap().parse().unwrap();
+            Some(Date::from_calendar_date(year, month.unwrap(), day).unwrap())
+        } else {
+            None
+        }
+    } else {
+        tracing::debug!("Date is none");
+        None
+    };
     if provided.is_some_and(|p| authenticate(&state.hashed_password, &p)) {
         let new_todo = sqlx::query_as!(
             Todo,
             r#"
-            INSERT INTO todos (name, description, parent_id)
-            VALUES ($1, $2, $3)
-            RETURNING id, name, done, description, parent_id
+            INSERT INTO todos (name, description, parent_id, date)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id, name, done, description, parent_id, date
             "#,
             payload.name,
             payload.description,
-            payload.parent_id
+            payload.parent_id,
+            converted_date
         )
         .fetch_one(&state.pool)
         .await;
@@ -219,6 +295,7 @@ async fn create_todo(
 /// API: Delete a todo (and its descendants).
 async fn delete_todo(
     Query(query): Query<PasswordQuery>,
+    Query(date_query): Query<DateQuery>,
     cookies: CookieJar,
     State(state): State<AppState>,
     extract::Json(id_to_delete): extract::Json<i64>,
@@ -251,7 +328,10 @@ async fn delete_todo(
         .unwrap_or(false);
 
         // 3. Fetch updated todo list after deletion.
-        let new_todos = get_todos_json_inner(&state.pool).await.unwrap();
+        let new_todos =
+            get_todos_json_inner(&state.pool, date_query.date_less, date_query.date_more)
+                .await
+                .unwrap();
 
         if delete_successful {
             Ok(new_todos)
@@ -331,7 +411,12 @@ where
 
 /// GET "/" – renders the web interface. If the user is not authenticated,
 /// the page shows a login form. If authenticated, it shows the todo UI.
-async fn web_index(cookies: CookieJar, State(state): State<AppState>) -> impl IntoResponse {
+async fn web_index(
+    cookies: CookieJar,
+    State(state): State<AppState>,
+
+    Query(date_query): Query<DateQuery>,
+) -> impl IntoResponse {
     let auth_cookie = cookies.get("auth").map(|cookie| cookie.value().to_owned());
     let is_auth = if auth_cookie.is_some() {
         authenticate(&state.hashed_password, &auth_cookie.unwrap())
@@ -339,7 +424,7 @@ async fn web_index(cookies: CookieJar, State(state): State<AppState>) -> impl In
         false
     };
     let mut context = tera::Context::new();
-    let todos = get_todos_inner(&state.pool).await;
+    let todos = get_todos_inner(&state.pool, date_query.date_less, date_query.date_more).await;
     if let Ok(ok_todos) = todos {
         let hierarchy = build_hierarchy(ok_todos);
         context.insert("todos", &hierarchy);
